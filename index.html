@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>팔레트 품목 뷰어</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    .shadow-soft { box-shadow: 0 8px 30px rgba(0,0,0,0.08); }
+    @media print {
+      .no-print { display: none !important; }
+      body { padding: 0; }
+    }
+  </style>
+  <!-- Debug styles -->
+  <style>
+    #err{display:none}
+    #err.show{display:block}
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+  <header class="no-print sticky top-0 z-50 bg-white/90 backdrop-blur border-b border-gray-100">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
+      <div class="text-xl font-semibold">팔레트 품목 뷰어</div>
+      <div id="palletChip" class="ml-auto text-sm text-gray-600"></div>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 py-6">
+    <div id="err" class="no-print mb-4 p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl"></div>
+    <section id="intro" class="mb-6 p-4 bg-white rounded-2xl shadow-soft">
+      <h1 class="text-2xl font-bold mb-2">팔레트 상세 목록</h1>
+      <p class="text-gray-600">URL의 <code>?p=코드</code> 값으로 자동 필터링됩니다.</p>
+    </section>
+
+    <section id="summary" class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+      <div class="bg-white rounded-2xl p-4 shadow-soft">
+        <div class="text-sm text-gray-500">코드</div>
+        <div id="sumPallet" class="text-xl font-semibold">-</div>
+      </div>
+      <div class="bg-white rounded-2xl p-4 shadow-soft">
+        <div class="text-sm text-gray-500">총 품목수</div>
+        <div id="sumItems" class="text-xl font-semibold">-</div>
+      </div>
+      <div class="bg-white rounded-2xl p-4 shadow-soft">
+        <div class="text-sm text-gray-500">총 수량</div>
+        <div id="sumQty" class="text-xl font-semibold">-</div>
+      </div>
+    </section>
+
+    <section class="no-print bg-white rounded-2xl p-4 shadow-soft mb-6">
+      <div class="flex flex-col md:flex-row gap-3 items-stretch md:items-end">
+        <div class="flex-1">
+          <label class="block text-sm text-gray-600 mb-1">검색(코드/바코드/설명)</label>
+          <input id="searchInput" type="search" placeholder="예: CODE1234, 8801234567890, 상품명" class="w-full border rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+        </div>
+        <div>
+          <label class="block text-sm text-gray-600 mb-1">분류</label>
+          <select id="catSelect" class="border rounded-xl px-3 py-2 min-w-[160px]">
+            <option value="">전체</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm text-gray-600 mb-1">정렬</label>
+          <select id="sortSelect" class="border rounded-xl px-3 py-2 min-w-[160px]">
+            <option value="desc">설명 ▲</option>
+            <option value="qty_desc">수량 ▼</option>
+            <option value="qty_asc">수량 ▲</option>
+          </select>
+        </div>
+        <div class="ml-auto flex gap-2">
+          <button id="btnPrint" class="px-4 py-2 rounded-xl bg-gray-800 text-white">인쇄/PDF</button>
+          <button id="btnCsv" class="px-4 py-2 rounded-xl bg-blue-600 text-white">CSV 내려받기</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="bg-white rounded-2xl shadow-soft overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="bg-gray-100 text-gray-600">
+            <tr>
+              <th class="text-left px-4 py-2">코드</th>
+              <th class="text-left px-4 py-2">CATE2</th>
+              <th class="text-left px-4 py-2">CATE5</th>
+              <th class="text-left px-4 py-2">분류</th>
+              <th class="text-left px-4 py-2">바코드</th>
+              <th class="text-left px-4 py-2">설명</th>
+              <th class="text-right px-4 py-2">수량</th>
+              <th class="text-left px-4 py-2">기존판매가</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+      <div id="emptyState" class="hidden p-8 text-center text-gray-500">조건에 맞는 결과가 없습니다.</div>
+    </section>
+
+    <div class="no-print flex items-center justify-between gap-3 mt-4">
+      <div class="text-sm text-gray-500">페이지 <span id="pageNow">1</span> / <span id="pageTotal">1</span></div>
+      <div class="flex items-center gap-2">
+        <label class="text-sm text-gray-500">페이지당</label>
+        <select id="pageSize" class="border rounded-xl px-3 py-1">
+          <option>25</option>
+          <option selected>50</option>
+          <option>100</option>
+        </select>
+        <button id="prev" class="px-3 py-1 rounded-lg border">이전</button>
+        <button id="next" class="px-3 py-1 rounded-lg border">다음</button>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const CSV_URL = '<<스프레드시트_CSV_URL>>';
+
+    const COLS = {
+      code: '코드',
+      cate2: 'CATE2',
+      cate5: 'CATE5',
+      cate: '분류',
+      barcode: 'BARCODE',
+      desc: 'DESCRIPTION',
+      qty: '수량',
+      price: '기존판매가'
+    };
+
+    // 허용할 대체 헤더(공백/대소문자/한글 변형 등)
+    const ALIASES = {
+      '코드': ['code','Code',' CODE','코드 '],
+      'CATE2': ['cate2','Cate2',' CATE2','CATE2 '],
+      'CATE5': ['cate5','Cate5',' CATE5','CATE5 '],
+      '분류': ['category','Category',' 분류','분류 '],
+      'BARCODE': ['barcode','Barcode',' 바코드','BAR CODE'],
+      'DESCRIPTION': ['desc','Desc','설명',' DESCRIPTION','DESCRIPTION '],
+      '수량': ['qty','Qty',' 수량','수량 '],
+      '기존판매가': ['price','Price',' 기존판매가','기존 판매가','판매가']
+    };
+
+    const url = new URL(location.href);
+    const palletParam = url.searchParams.get('p') || '';
+
+    let rows = [];
+    let filtered = [];
+    let view = [];
+
+    const $tbody = document.getElementById('tbody');
+    const $empty = document.getElementById('emptyState');
+    const $sumPallet = document.getElementById('sumPallet');
+    const $sumItems = document.getElementById('sumItems');
+    const $sumQty = document.getElementById('sumQty');
+    const $palletChip = document.getElementById('palletChip');
+    const $search = document.getElementById('searchInput');
+    const $cat = document.getElementById('catSelect');
+    const $sort = document.getElementById('sortSelect');
+    const $pageNow = document.getElementById('pageNow');
+    const $pageTotal = document.getElementById('pageTotal');
+    const $pageSize = document.getElementById('pageSize');
+
+    let page = 1;
+
+    function safeInt(v){
+      const n = parseInt(String(v).replace(/[^0-9-]/g,''),10);
+      return isNaN(n) ? 0 : n;
+    }
+
+    function renderSummary(){
+      $sumPallet.textContent = palletParam || '-';
+      $palletChip.textContent = palletParam ? `코드: ${palletParam}` : '';
+      $sumItems.textContent = filtered.length.toLocaleString();
+      const totalQty = filtered.reduce((a,r)=> a + safeInt(r[COLS.qty]), 0);
+      $sumQty.textContent = totalQty.toLocaleString();
+    }
+
+    function applyFilters(){
+      const q = $search.value.trim().toLowerCase();
+      const cat = $cat.value;
+      view = filtered.filter(r=>{
+        const hitQ = !q || [COLS.code, COLS.barcode, COLS.desc].some(c=> String(r[c]||'').toLowerCase().includes(q));
+        const hitC = !cat || String(r[COLS.cate]||'') === cat;
+        return hitQ && hitC;
+      });
+      if($sort.value==='qty_desc'){
+        view.sort((a,b)=> safeInt(b[COLS.qty]) - safeInt(a[COLS.qty]));
+      } else if($sort.value==='qty_asc'){
+        view.sort((a,b)=> safeInt(a[COLS.qty]) - safeInt(b[COLS.qty]));
+      } else {
+        view.sort((a,b)=> String(a[COLS.desc]||'').localeCompare(String(b[COLS.desc]||'')));
+      }
+      page=1;
+      renderTable();
+    }
+
+    function renderCategories(){
+      const cats = Array.from(new Set(filtered.map(r=> String(r[COLS.cate]||'').trim()).filter(Boolean))).sort();
+      $cat.innerHTML = '<option value="">전체</option>' + cats.map(c=>`<option>${c}</option>`).join('');
+    }
+
+    function renderTable(){
+      const size = parseInt($pageSize.value, 10) || 50;
+      const total = Math.max(1, Math.ceil(view.length / size));
+      page = Math.min(page, total);
+      $pageNow.textContent = page;
+      $pageTotal.textContent = total;
+      const start = (page-1)*size;
+      const slice = view.slice(start, start+size);
+
+      $tbody.innerHTML = slice.map(r=>`
+        <tr class="border-b last:border-b-0 hover:bg-gray-50">
+          <td class="px-4 py-2 font-medium">${r[COLS.code]||''}</td>
+          <td class="px-4 py-2">${r[COLS.cate2]||''}</td>
+          <td class="px-4 py-2">${r[COLS.cate5]||''}</td>
+          <td class="px-4 py-2">${r[COLS.cate]||''}</td>
+          <td class="px-4 py-2">${r[COLS.barcode]||''}</td>
+          <td class="px-4 py-2">${r[COLS.desc]||''}</td>
+          <td class="px-4 py-2 text-right">${safeInt(r[COLS.qty]).toLocaleString()}</td>
+          <td class="px-4 py-2">${r[COLS.price]||''}</td>
+        </tr>`).join('');
+
+      $empty.classList.toggle('hidden', view.length !== 0);
+    }
+
+    function downloadCsv(){
+      if(view.length === 0) return;
+      const headers = Object.values(COLS);
+      const rowsCsv = [headers.join(',')].concat(view.map(r=> headers.map(h=>`"${String(r[h]||'').replaceAll('"','""')}"`).join(',')));
+      const blob = new Blob(["\uFEFF" + rowsCsv.join('\n')], {type:'text/csv;charset=utf-8;'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${palletParam||'pallet'}-items.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    document.getElementById('prev').onclick = ()=>{ if(page>1){ page--; renderTable(); } };
+    document.getElementById('next').onclick = ()=>{ page++; renderTable(); };
+    $pageSize.onchange = ()=> renderTable();
+    $search.oninput = ()=> applyFilters();
+    $cat.onchange = ()=> applyFilters();
+    $sort.onchange = ()=> applyFilters();
+    document.getElementById('btnPrint').onclick = ()=> window.print();
+    document.getElementById('btnCsv').onclick = downloadCsv;
+
+    function normalizeHeaders(row){
+      const out = {};
+      for (const [k,v] of Object.entries(row)){
+        const key = String(k).trim();
+        let mapped = key;
+        // 1) 정확 일치
+        if(Object.values(COLS).includes(key)) mapped = key;
+        else {
+          // 2) alias 매핑
+          for(const [canon, alts] of Object.entries(ALIASES)){
+            if(alts.map(s=>String(s).trim().toLowerCase()).includes(key.toLowerCase())){ mapped = canon; break; }
+          }
+        }
+        out[mapped] = v;
+      }
+      return out;
+    }
+
+    function needCols(rows){
+      const needed = Object.values(COLS);
+      const keys = rows.length? Object.keys(rows[0]) : [];
+      return needed.filter(k=> !keys.includes(k));
+    }
+
+    function showErr(msg){
+      const el = document.getElementById('err');
+      if(!el) return;
+      el.textContent = msg;
+      el.classList.add('show');
+    }
+
+    function load(){
+      const csvUrl = CSV_URL + (CSV_URL.includes('?')?'&':'?') + 't=' + Date.now();
+      Papa.parse(csvUrl, {
+        download: true,
+        header: true,
+        skipEmptyLines: true,
+        complete: (res)=>{
+          const raw = res.data || [];
+          if(!raw.length){ showErr('CSV에 데이터 행이 없습니다. (헤더만 있거나 잘못된 gid일 수 있어요)'); return; }
+          // 헤더 정규화
+          rows = raw.map(normalizeHeaders);
+          const missing = needCols(rows);
+          if(missing.length){
+            showErr('필수 헤더가 누락되었습니다: ' + missing.join(', ') + '  — 시트 1행을 확인하세요.');
+          }
+          const norm = (s) => String(s||'').trim().toLowerCase();
+          filtered = palletParam ? rows.filter(r => norm(r[COLS.code]) === norm(palletParam)) : rows;
+          renderSummary();
+          renderCategories();
+          applyFilters();
+        },
+        error: (err)=>{
+          console.error(err);
+          showErr('CSV 로드 실패: ' + (err?.message || JSON.stringify(err)) + '
+URL: ' + CSV_URL);
+        }
+      });
+    }
+
+    window.addEventListener('DOMContentLoaded', load);('DOMContentLoaded', load);
+  </script>
+</body>
+</html>
